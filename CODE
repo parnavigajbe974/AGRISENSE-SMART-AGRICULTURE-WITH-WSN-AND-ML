@@ -1,0 +1,364 @@
+CODE FOR ML MODEL
+import networkx as nx
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.cluster import KMeans
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import seaborn as sns
+import matplotlib.pyplot as plt
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+
+# Load the dataset
+df = pd.read_csv("crop_yield_prediction.csv", encoding="ISO-8859-1")
+
+
+# Fill missing values
+df.fillna(df.mean(numeric_only=True), inplace=True)
+
+# Define features and target variable
+features = ["Precipitation (mm day-1)", "Temperature at 2 Meters ( C )", "Relative Humidity at 2 Meters (%)", "Specific Humidity at 2 Meters (g/kg)"]
+X = df[features]
+y = df["Yield"]
+
+# Standardize features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Train-Test Split
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+
+# Train Random Forest Model
+rf_model = RandomForestRegressor(n_estimators=200, random_state=42)
+rf_model.fit(X_train, y_train)
+df["Predicted_Yield_RF"] = rf_model.predict(X_scaled)  # Predict on full dataset
+
+# Train SVM Model
+svm_model = SVR(kernel='linear')
+svm_model.fit(X_train, y_train)
+df["Predicted_Yield_SVM"] = svm_model.predict(X_scaled)
+
+# K-Means Clustering
+kmeans = KMeans(n_clusters=5, random_state=42, n_init=20)
+df["Cluster"] = kmeans.fit_predict(X_scaled)
+cluster_medians = df.groupby("Cluster")[features + ["Yield"]].median()
+
+# ANN Model
+ann_model = Sequential()
+ann_model.add(Dense(64, input_dim=X_train.shape[1], activation='relu'))
+ann_model.add(Dense(128, activation='relu'))
+ann_model.add(Dense(64, activation='relu'))
+ann_model.add(Dense(1, activation='linear'))
+
+# Compile the ANN model
+ann_model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+
+# Train the ANN model
+ann_model.fit(X_train, y_train, epochs=50, batch_size=32, validation_split=0.2, verbose=1)
+
+# Predict using ANN
+df["Predicted_Yield_ANN"] = ann_model.predict(X_scaled)
+
+# Generate Recommendations
+def generate_recommendations(row):
+    cluster_id = row["Cluster"]
+    cluster_median = cluster_medians.loc[cluster_id]
+    recommendations = []
+
+    # Rainfall-based recommendations
+    if row["Precipitation (mm day-1)"] > cluster_median["Precipitation (mm day-1)"] * 1.1:
+        recommendations.append("Reduce irrigation, excess rainfall detected.")
+    elif row["Precipitation (mm day-1)"] < cluster_median["Precipitation (mm day-1)"] * 0.9:
+        recommendations.append("Increase irrigation to compensate for low rainfall.")
+
+    # Temperature-based recommendations
+    if row["Temperature at 2 Meters ( C )"] > cluster_median["Temperature at 2 Meters ( C )"] + 1.5:
+        recommendations.append("Implement cooling techniques, high temperature detected.")
+    elif row["Temperature at 2 Meters ( C )"] < cluster_median["Temperature at 2 Meters ( C )"] - 1.5:
+        recommendations.append("Consider warming techniques, possible cold stress.")
+
+    # Humidity-based recommendations
+    if row["Relative Humidity at 2 Meters (%)"] > cluster_median["Relative Humidity at 2 Meters (%)"] + 5:
+        recommendations.append("Monitor for fungal growth, high humidity detected.")
+    elif row["Relative Humidity at 2 Meters (%)"] < cluster_median["Relative Humidity at 2 Meters (%)"] - 5:
+        recommendations.append("Increase humidity management, dry air detected.")
+
+    if row["Specific Humidity at 2 Meters (g/kg)"] < cluster_median["Specific Humidity at 2 Meters (g/kg)"] - 0.2:
+        recommendations.append("Slightly dry air detected, increase irrigation.")
+
+    # Yield improvement suggestions
+    if row["Predicted_Yield_RF"] < df["Predicted_Yield_RF"].median() * 0.9:
+        recommendations.append("Optimize fertilization and pest control to increase yield.")
+    elif row["Predicted_Yield_RF"] > df["Predicted_Yield_RF"].median() * 1.1:
+        recommendations.append("Maintain current strategies, yield is optimal.")
+
+    if not recommendations:
+        return "Conditions are stable. Continue regular monitoring."
+
+    return " ".join(recommendations)  # Show full recommendations
+    # Ensure full text display in DataFrame output
+pd.set_option("display.max_colwidth", None)  # No truncation of text in columns
+
+df["Recommendations"] = df.apply(generate_recommendations, axis=1)
+
+# Save final recommendations
+df.to_csv("final_recommendations.csv", index=False)
+
+# Visualization 1: Yield vs Temperature by Cluster
+plt.figure(figsize=(8, 6))
+sns.scatterplot(x=df["Temperature at 2 Meters ( C )"], y=df["Yield"], hue=df["Cluster"], palette="coolwarm")
+plt.title("Temperature vs Yield with Cluster Labels")
+plt.xlabel("Temperature at 2 Meters ( C )")
+plt.ylabel("Yield")
+plt.show()
+
+# Visualization 2: Predicted Yield vs Actual Yield (Random Forest vs SVM vs ANN)
+plt.figure(figsize=(8, 6))
+sns.scatterplot(x=df["Predicted_Yield_RF"], y=df["Yield"], label="RF Model", color='blue', alpha=0.7)
+sns.scatterplot(x=df["Predicted_Yield_SVM"], y=df["Yield"], label="SVM Model", color='red', alpha=0.7)
+sns.scatterplot(x=df["Predicted_Yield_ANN"], y=df["Yield"], label="ANN Model", color='green', alpha=0.7)
+plt.title("Predicted Yield vs Actual Yield")
+plt.xlabel("Predicted Yield")
+plt.ylabel("Actual Yield")
+plt.legend()
+plt.show()
+
+# Visualization 1: Box Plot for Yield Distribution
+# plt.figure(figsize=(8, 6))
+# sns.boxplot(y=df["Yield"])
+# plt.title("Box Plot of Yield Distribution")
+# plt.ylabel("Yield")
+# plt.show()
+
+plt.figure(figsize=(8, 6))
+sns.boxplot(x=df["Cluster"], y=df["Yield"])
+plt.title("Box Plot of Yield Distribution by Cluster")
+plt.xlabel("Cluster")
+plt.ylabel("Yield")
+plt.show()
+
+# Model Performance Metrics (Random Forest)
+rf_mae = mean_absolute_error(y_test, rf_model.predict(X_test))
+rf_mse = mean_squared_error(y_test, rf_model.predict(X_test))
+rf_r2 = r2_score(y_test, rf_model.predict(X_test))
+
+# Model Performance Metrics (SVM)
+svm_mae = mean_absolute_error(y_test, svm_model.predict(X_test))
+svm_mse = mean_squared_error(y_test, svm_model.predict(X_test))
+svm_r2 = r2_score(y_test, svm_model.predict(X_test))
+
+# Model Performance Metrics (ANN)
+ann_mae = mean_absolute_error(y_test, ann_model.predict(X_test))
+ann_mse = mean_squared_error(y_test, ann_model.predict(X_test))
+ann_r2 = r2_score(y_test, ann_model.predict(X_test))
+
+print("Random Forest Model Performance:")
+print(f"MAE: {rf_mae:.3f}")
+print(f"MSE: {rf_mse:.3f}")
+print(f"R2 Score: {rf_r2:.3f}")
+
+print("\nSVM Model Performance:")
+print(f"MAE: {svm_mae:.3f}")
+print(f"MSE: {svm_mse:.3f}")
+print(f"R2 Score: {svm_r2:.3f}")
+
+print("\nANN Model Performance:")
+print(f"MAE: {ann_mae:.3f}")
+print(f"MSE: {ann_mse:.3f}")
+print(f"R2 Score: {ann_r2:.3f}")
+
+# Visualization: Network Graph for Feature Relationships
+G = nx.Graph()
+
+# Add nodes for features
+for feature in features:
+    G.add_node(feature)
+
+# Add edges based on correlation
+correlation_matrix = df[features].corr()
+threshold = 0.4  # Correlation threshold for edges
+for i in range(len(features)):
+    for j in range(i + 1, len(features)):
+        if abs(correlation_matrix.iloc[i, j]) > threshold:
+            G.add_edge(features[i], features[j], weight=correlation_matrix.iloc[i, j])
+
+plt.figure(figsize=(8, 6))
+nx.draw(G, with_labels=True, node_color='lightblue', edge_color='gray', node_size=3000, font_size=10)
+plt.title("Feature Relationship Network Graph")
+plt.show()
+
+# Display sample results
+print(df[["Precipitation (mm day-1)", "Temperature at 2 Meters ( C )", "Relative Humidity at 2 Meters (%)",
+          "Specific Humidity at 2 Meters (g/kg)", "Predicted_Yield_RF", "Predicted_Yield_SVM", "Predicted_Yield_ANN", "Cluster", "Recommendations"]].head(30))
+
+CODE FOR COLLECTING DATA FROM AURDINO
+import serial
+import pandas as pd
+import time
+import re
+import os
+
+# Define Serial Port (Check your Arduino IDE for the correct port)
+SERIAL_PORT = "COM5"  
+BAUD_RATE = 9600  
+
+# Initialize Serial Connection
+ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
+time.sleep(2)  # Allow time for connection
+
+# Define column headers
+columns = ["Timestamp", "Temperature (C)", "Humidity (%)", "Soil_Moisture"]
+
+# Initialize variables
+temperature = None
+humidity = None
+
+try:
+    while True:
+        line = ser.readline().decode("utf-8").strip()
+        
+        if "Humidity" in line and "Temperature" in line:
+            match = re.search(r"Humidity: ([\d.]+)%  Temperature: ([\d.]+)", line)
+            if match:
+                humidity = float(match.group(1))
+                temperature = float(match.group(2))
+        
+        elif "Soil Moisture Analog Value" in line:
+            if temperature is not None and humidity is not None:  # Ensure values exist
+                soil_moisture = int(line.split(":")[1].strip())
+                timestamp = time.strftime("%Y-%m-%d %H:%M")
+                
+                print(f"{timestamp} -> Temp: {temperature}°C, Humidity: {humidity}%, Soil Moisture: {soil_moisture}")
+
+                # Save data immediately to CSV
+                data = pd.DataFrame([[timestamp, temperature, humidity, soil_moisture]], columns=columns)
+                try:
+                    data.to_csv("real_time_sensor_data.csv", mode='a', header=not os.path.exists("real_time_sensor_data.csv"), index=False)
+                    print("✅ Data saved to real_time_sensor_data.csv")
+                except Exception as e:
+                    print(f"⚠️ Error saving data: {e}")
+
+except KeyboardInterrupt:
+    print("Stopping data collection.")
+    ser.close()
+
+CODE FOR USING COLLECTED DATA IN ML MODEL
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.cluster import KMeans
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+
+# Load datasets
+sensor_data = pd.read_csv("real_time_sensor_data.csv", encoding="ISO-8859-1")
+precipitation_data = pd.read_csv("precipitation_data.csv", encoding="ISO-8859-1")
+crop_data = pd.read_csv("crop_yield_prediction.csv", encoding="ISO-8859-1")
+
+# Convert timestamps (Fix missing timestamps by filling forward)
+for df in [sensor_data, precipitation_data]:
+    if "Timestamp" in df.columns:
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        df["Timestamp"].fillna(method="ffill", inplace=True)
+
+# Fix categorical encoding issues
+le = LabelEncoder()
+crop_data["Crop"] = le.fit_transform(crop_data["Crop"].astype(str))
+precipitation_data["City"] = precipitation_data["City"].str.replace(r"\s*,\s*", ", ").str.strip()
+
+# Handle missing values (Numeric → Mean, Categorical → Mode)
+for df in [sensor_data, precipitation_data, crop_data]:
+    df.fillna(df.mean(numeric_only=True), inplace=True)
+    df.fillna(df.mode().iloc[0], inplace=True)
+
+# Prepare training data
+X_existing = crop_data.drop(columns=["Yield"], errors="ignore")
+y_existing = crop_data["Yield"]
+X_real_time = sensor_data.drop(columns=["Timestamp"], errors="ignore")
+
+# Fix column mismatch
+missing_cols = set(X_existing.columns) - set(X_real_time.columns)
+extra_cols = set(X_real_time.columns) - set(X_existing.columns)
+for col in missing_cols:
+    X_real_time[col] = 0
+X_real_time = X_real_time[X_existing.columns]
+
+# Normalize features
+scaler = StandardScaler()
+X_existing_scaled = scaler.fit_transform(X_existing)
+X_real_time_scaled = scaler.transform(X_real_time)
+
+# K-Means Clustering
+num_clusters = 3
+kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init=10)
+kmeans.fit(X_existing_scaled)
+sensor_data["Cluster"] = kmeans.predict(X_real_time_scaled)
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X_existing_scaled, y_existing, test_size=0.2, random_state=42)
+
+# Train models
+svm_model = SVR()
+svm_model.fit(X_train, y_train)
+
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+
+# ANN model
+ann_model = Sequential([
+    Dense(64, activation="relu", input_shape=(X_train.shape[1],)),
+    Dropout(0.3),
+    Dense(32, activation="relu"),
+    Dropout(0.3),
+    Dense(1, activation="linear")
+])
+ann_model.compile(optimizer="adam", loss="mse")
+ann_model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=1, validation_data=(X_test, y_test))
+
+# Predict crop yield for real-time sensor data
+svm_yield_pred = svm_model.predict(X_real_time_scaled)
+rf_yield_pred = rf_model.predict(X_real_time_scaled)
+ann_yield_pred = ann_model.predict(X_real_time_scaled).flatten()
+
+# Average prediction
+avg_yield_pred = (svm_yield_pred + rf_yield_pred + ann_yield_pred) / 3
+sensor_data["Predicted_Yield"] = avg_yield_pred
+
+# Define recommendation logic
+def recommend_action(cluster, predicted_yield):
+    if cluster == 0:
+        if predicted_yield < np.percentile(y_existing, 30):
+            return "Immediate irrigation needed! Apply nitrogen fertilizer."
+        else:
+            return "Monitor soil moisture and apply light irrigation if needed."
+    elif cluster == 1:
+        if predicted_yield < np.percentile(y_existing, 50):
+            return "Optimize irrigation and adjust phosphorus levels."
+        else:
+            return "Conditions are stable. Routine monitoring recommended."
+    else:
+        if predicted_yield < np.percentile(y_existing, 70):
+            return "Optimize water & nutrient balance for higher yield."
+        else:
+            return "Crop is healthy. Continue monitoring."
+
+# Apply recommendation logic
+sensor_data["Action_Recommendation"] = [
+    recommend_action(cluster, yield_pred)
+    for cluster, yield_pred in zip(sensor_data["Cluster"], avg_yield_pred)
+]
+
+# Drop timestamp column before saving
+sensor_data.drop(columns=["Timestamp"], errors="ignore", inplace=True)
+
+# Save final output
+sensor_data.to_csv("real_time_with_yield_recommendations.csv", index=False)
+print("Final recommendations saved in 'real_time_with_yield_recommendations.csv'")
